@@ -4,6 +4,7 @@
  */
 var k = require("kolmafia");
 var core = require("../scripts/crimbo-core.js");
+var mail = require("../scripts/crimbo-mail.js");
 
 // KoLmafia serves .js URLs as JavaScript unless relay=true is present.
 // Keep this marker on every link and form, not just the dropdown entry.
@@ -48,6 +49,7 @@ function load(owner){
   try{
     var state=JSON.parse(raw);
     if(state.schema!=="crimbo-giveaway.v0.1"||state.ownerId!==owner||!state.config||!state.sales||!state.profiles||!state.exclusions||!state.decisions||!state.events||!state.nameIds)throw new Error("State schema/account mismatch");
+    mail.ensureStorage(state);
     return state;
   }catch(e){throw new Error("State file unreadable; refusing to overwrite it. Back up data/"+statePath(owner)+" first. "+e);}
 }
@@ -90,17 +92,24 @@ function inspect(owner,s,id){
   save(owner,s);
   return p.valid?"Profile #"+id+" inspected.":"Profile #"+id+" could not be fully parsed and remains on hold.";
 }
+function mailLocked(s){
+  mail.ensureStorage(s);
+  var b=mail.activeBatch(s);
+  return !!(b&&b.status!=="COMPLETE"&&b.status!=="CANCELLED");
+}
 function handle(owner,s){
   var action=String(k.formField("action")||"");
   if(!action)return "";
   var id=core.safeId(k.formField("id"));
   if(action==="refresh")return refreshSales(owner,s);
   if(action==="set_day"){
+    if(mailLocked(s))throw new Error("Finish the active frozen batch before changing the campaign day.");
     var day=core.isoDate(k.formField("day"));
     if(!day||day<s.config.start||day>s.config.end)throw new Error("Select a valid campaign day, Dec 1-31, 2026.");
     s.config.day=day;addEvent(s,"day_selected",day,"");save(owner,s);return "Selected giveaway day "+day+".";
   }
   if(action==="settings"){
+    if(mailLocked(s))throw new Error("Item IDs cannot change while a frozen batch is active.");
     var proxy=resolveItem(k.formField("proxyItemId")),prize=resolveItem(k.formField("prizeItemId"));
     if(!proxy.valid||!prize.valid)throw new Error("Both fields require valid positive KoL item IDs recognized by this KoLmafia installation. Nothing saved.");
     if(proxy.id===prize.id)throw new Error("The proxy ticket and actual prize must be different items. Nothing saved.");
@@ -108,7 +117,27 @@ function handle(owner,s){
     // Never retain editable names as authorities after migrating from v0.1.
     delete s.config.proxy;delete s.config.prize;
     addEvent(s,"item_ids_updated","",proxy.id+"="+proxy.name+" / "+prize.id+"="+prize.name);save(owner,s);
-    return "Item IDs saved: proxy #"+proxy.id+" ("+proxy.name+"); prize #"+prize.id+" ("+prize.name+"). Live sending remains disabled.";
+    return "Item IDs saved: proxy #"+proxy.id+" ("+proxy.name+"); prize #"+prize.id+" ("+prize.name+"). The Kmail distribution panel now handles approved batches with explicit confirmation.";
+  }
+  if(action==="prepare_batch"){
+    var chosen=configuredItems(s),prepared=mail.prepare(s,owner,chosen,k);
+    addEvent(s,"batch_prepared",prepared.id,"recipients="+prepared.recipients.length+" prize_id="+prepared.prizeItemId);
+    save(owner,s);return "Frozen "+prepared.recipients.length+" approved recipients. Review the batch below; no items have been sent.";
+  }
+  if(action==="cancel_batch"){
+    var cancelled=mail.cancel(s,owner,configuredItems(s),k);
+    addEvent(s,"batch_cancelled",cancelled.id,"");save(owner,s);return "Unsent batch cancelled.";
+  }
+  if(action==="reconcile_sent"){
+    var who=mail.reconcile(s,owner,configuredItems(s),k,k.formField("id"),k.formField("confirmation"));
+    addEvent(s,"mail_reconciled_sent",who,"verified_manually_in_sent_messages");save(owner,s);
+    return "Recipient #"+who+" recorded as manually confirmed sent. This does not send an item.";
+  }
+  if(action==="send_next"){
+    var r=mail.sendNext(s,owner,configuredItems(s),k,function(){save(owner,s);},
+      function(kind,who,detail){addEvent(s,kind,who,detail);},k.formField("confirmation"));
+    return r.blocked?"Stopped at uncertain send. Inspect the Kmail sent folder and audit history; NO automatic retry.":
+      "Sent/observed "+r.sent+" item(s) this click; skipped "+r.skipped+" ineligible recipient(s).";
   }
   if(action==="link"){
     var name=core.normalize(k.formField("name"));
@@ -141,6 +170,7 @@ function handle(owner,s){
     return "Player #"+id+" removed from manual exclusions (account-date cutoff still applies).";
   }
   if(action==="approve"||action==="hold"){
+    if(mailLocked(s))throw new Error("Review decisions are frozen while a batch is active. Finish this batch first.");
     var selection=configuredItems(s);
     if(!selection.proxy.valid||!selection.prize.valid||selection.proxy.id===selection.prize.id)
       throw new Error("Cannot review approvals until both distinct item IDs resolve in KoLmafia.");
@@ -163,7 +193,7 @@ function render(owner,s,message,error){
   var rows=itemsReady?core.makeQueue(s,items.proxy):[],approved=0,flagged=0,excluded=0,held=0;
   for(var i=0;i<rows.length;i++){if(rows[i].status==="APPROVED")approved++;if(rows[i].flags.length)flagged++;if(rows[i].status==="EXCLUDED")excluded++;if(rows[i].status==="HOLD: ID/profile"||rows[i].status==="HELD")held++;}
   var h=["<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='darkreader-lock'><title>CrimboGiveaway</title>",css(),"</head><body><main>"];
-  h.push("<header><div class='section'><div><h1>❄ CrimboGiveaway</h1><p>KoLmafia giveaway workbench · Prototype v0.1</p></div><div class='small'>Operator: "+escapeHtml(k.myName())+" (#"+escapeHtml(owner)+")<br>Selected day: "+escapeHtml(s.config.day)+"</div></div></header>");
+  h.push("<header><div class='section'><div><h1>❄ CrimboGiveaway</h1><p>KoLmafia giveaway workbench · Prototype v0.2</p></div><div class='small'>Operator: "+escapeHtml(k.myName())+" (#"+escapeHtml(owner)+")<br>Selected day: "+escapeHtml(s.config.day)+"</div></div></header>");
   h.push("<nav>");var tabs={queue:"Daily queue",exclusions:"Exclusions",archive:"Audit archive",settings:"Settings"};
   Object.keys(tabs).forEach(function(t){h.push("<a class='"+(tab===t?"current":"")+"' href='"+RELAY_URL+"&amp;tab="+t+"'>"+tabs[t]+"</a>");});h.push("</nav>");
   if(error)h.push("<div class='alert' role='alert'>"+escapeHtml(error)+"</div>");
@@ -172,7 +202,7 @@ function render(owner,s,message,error){
   if(tab==="queue"){
     h.push("<section class='panel'><div class='section'><div><h2>Daily purchase and verification queue</h2><p class='small'>Proxy ticket: <b>"+displayItem(items.proxy)+"</b> · Actual prize: <b>"+displayItem(items.prize)+"</b> · Held: "+held+"</p></div><div>"+submit("refresh","Refresh KoL Store Log",{},"")+" "+submit("inspect_next","Inspect next 5 profiles",{},"minor")+"</div></div>");
     if(!itemsReady)h.push("<div class='alert' role='alert'><strong>Item configuration incomplete or invalid.</strong> Open <a href='"+RELAY_URL+"&amp;tab=settings'>Settings</a> and enter two distinct, valid KoL item IDs. Purchase matching and approvals are disabled until both resolve successfully. Existing sales and decisions are preserved.</div>");
-    h.push("<div class='note'>A purchase does not authorize a send. All recipients require explicit approval. This version <b>does not send Kmail</b>.</div>");
+    h.push("<div class='note'>A purchase does not authorize a send. Approve players individually, freeze a batch, then type its confirmation phrase to send at most 5 prizes per click. No background sends.</div>");
     h.push("<div class='tablewrap'><table><thead><tr><th>Player / profile</th><th>Purchases</th><th>Profile flags</th><th>Status</th><th>Operator review</th></tr></thead><tbody>");
     if(!rows.length)h.push("<tr><td colspan='5'>"+(itemsReady?"No matching purchases captured for this giveaway day. Refresh the Store Log or select another date.":"Configure both item IDs in Settings to populate the queue.")+"</td></tr>");
     for(i=0;i<rows.length;i++){
@@ -193,7 +223,35 @@ function render(owner,s,message,error){
       h.push("</td></tr>");
     }
     h.push("</tbody></table></div></section>");
-    var csv=core.exportCsv(rows,s,items.prize);h.push("<section class='panel'><h2>Daily export and distribution</h2><p>Approved players: <b>"+approved+"</b>. This CSV is a review/export record, not an authoritative Kmail receipt.</p><a class='link' download='crimbo-"+s.config.day+".csv' href='data:text/csv;charset=utf-8,"+attr(encodeURIComponent(csv))+"'>Export daily CSV</a> <button disabled title='Live Kmail is not implemented or verified in prototype v0.1'>Send approved batch — not available in v0.1</button></section>");
+    var csv=core.exportCsv(rows,s,items.prize);h.push("<section class='panel'><h2>Daily export and Kmail distribution</h2><p>Approved players: <b>"+approved+"</b>. CSV is a review list, not a Kmail receipt.</p><a class='link' download='crimbo-"+s.config.day+".csv' href='data:text/csv;charset=utf-8,"+attr(encodeURIComponent(csv))+"'>Export daily CSV</a>");
+    mail.ensureStorage(s);
+    var batch=mail.activeBatch(s),t=mail.tally(s,batch);
+    if(!batch||batch.status==="CANCELLED"||batch.status==="COMPLETE"){
+      if(batch&&batch.status==="COMPLETE")h.push("<p class='note'>Last batch complete: "+escapeHtml(batch.id)+" — observed sent: "+t.sent+", skipped: "+t.skipped+".</p>");
+      if(itemsReady&&approved>0)h.push("<p>Review all recipients before freezing. Only approved, verified, non-excluded players will enter the batch. Must be current KoL rollover day.</p>"+submit("prepare_batch","Freeze approved batch",{},"","queue"));
+    }else{
+      h.push("<p><b>Frozen batch:</b> "+escapeHtml(batch.id)+" · status "+escapeHtml(batch.status)+" · "+batch.recipients.length+" recipients · "+t.sent+" observed sent / "+t.pending+" pending / "+t.unknown+" uncertain / "+t.skipped+" skipped.</p>");
+      h.push("<p>Prize: "+escapeHtml(batch.prizeName)+" (#"+escapeHtml(batch.prizeItemId)+"). Confirm this item and all recipients below before sending.</p><div class='tablewrap'><table><tr><th>Player ID</th><th>Name at freeze</th><th>Recorded outcome</th></tr>");
+      for(var y=0;y<batch.recipients.length;y++){
+        var x=batch.recipients[y],entry=s.sendLedger[mail.key(batch.day,x.id,batch.prizeItemId)];
+        h.push("<tr><td>#"+escapeHtml(x.id)+"</td><td>"+escapeHtml(x.name)+"</td><td>"+escapeHtml(entry?entry.status:"PENDING")+"</td></tr>");
+      }
+      h.push("</table></div>");
+      if(batch.status==="PREPARED")h.push(submit("cancel_batch","Cancel unsent batch",{},"minor","queue"));
+      if(batch.status!=="BLOCKED_UNKNOWN"&&t.pending>0&&t.unknown===0&&t.started===0){
+        h.push("<p class='alert'>This action sends real items through KoLmafia. It can use KoLmafia's gift fallback when ordinary Kmail fails. No automatic retries. Type <b>SEND "+escapeHtml(batch.id)+"</b> to authorize up to five recipients.</p>");
+        h.push(formStart("queue")+"<input type='hidden' name='action' value='send_next'><label>Human authorization <input name='confirmation' autocomplete='off' required placeholder='SEND batch-id' aria-label='Type exact SEND batch ID'></label> <button type='submit'>Send next 5 approved prizes</button></form>");
+      }else if(batch.status==="BLOCKED_UNKNOWN"||t.unknown||t.started){
+        h.push("<p class='alert'>Stopped: uncertain delivery(s). Inspect KoL sent messages and inventory. Do not retry blindly. You may mark a player as sent ONLY after independently verifying the sent message.</p>");
+        for(var z=0;z<batch.recipients.length;z++){
+          var ri=batch.recipients[z],rec=s.sendLedger[mail.key(batch.day,ri.id,batch.prizeItemId)];
+          if(rec&&(rec.status==="UNKNOWN"||rec.status==="STARTED")){
+            h.push(formStart("queue")+"<input type='hidden' name='action' value='reconcile_sent'><input type='hidden' name='id' value='"+escapeHtml(ri.id)+"'><label>Confirm sent #"+escapeHtml(ri.id)+" <input name='confirmation' required autocomplete='off' placeholder='CONFIRMED SENT "+escapeHtml(ri.id)+"'></label> <button type='submit'>Record verified sent</button></form>");
+          }
+        }
+      }
+    }
+    h.push("</section>");
   }else if(tab==="settings"){
     h.push("<section class='panel'><h2>Campaign configuration</h2><p>Dates: "+s.config.start+" through "+s.config.end+". Accounts created on or after "+s.config.cutoff+" are automatically excluded when inspected.</p>");
     h.push(formStart("settings")+"<input type='hidden' name='action' value='set_day'><label>Review day <input type='date' name='day' min='2026-12-01' max='2026-12-31' value='"+attr(s.config.day)+"'></label> <button>Set day</button></form><p class='small'>Dates follow the KoL Store Log day; verify the rollover boundary before distributing.</p>");
@@ -216,7 +274,7 @@ function render(owner,s,message,error){
     for(i=0;i<recent.length;i++){var ev=recent[i];h.push("<tr><td>"+escapeHtml(ev.at)+"</td><td>"+escapeHtml(ev.day)+"</td><td>"+escapeHtml(ev.kind)+"</td><td>"+escapeHtml(ev.subject)+"</td><td>"+escapeHtml(ev.detail)+"</td></tr>");}
     if(!recent.length)h.push("<tr><td colspan='5'>No events yet.</td></tr>");h.push("</table></div></section>");
   }
-  h.push("<div class='foot small'>CrimboGiveaway v0.1 · Owner-separated state · Manual review · No live Kmail capability · GitHub: donCannoli-burns/CrimboGiveaway</div></main></body></html>");
+  h.push("<div class='foot small'>CrimboGiveaway v0.2 · Owner-separated state · Human-gated Kmail · No automatic retries · GitHub: donCannoli-burns/CrimboGiveaway</div></main></body></html>");
   return h.join("");
 }
 module.exports.main=function main(){
