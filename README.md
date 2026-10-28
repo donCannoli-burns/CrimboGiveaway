@@ -31,8 +31,8 @@ KoLmafia routes `.js` files as JavaScript by default. A JavaScript **relay page*
 
 ## Workflow
 
-1. Configure the **exact proxy item name** used in the store. Default: `proxy ticket`; prize label defaults to `Uncle Buck`.
-2. In **Settings**, select one campaign day between **2026-12-01 and 2026-12-31**.
+1. In **Settings**, enter the **numeric KoL item ID** of the proxy ticket and the **numeric KoL item ID** of the actual prize. Both are required and must differ. The script looks up their canonical names using `Item.get(id)` and confirms `toInt(item) === id`; no fuzzy name-based configuration is accepted.
+2. Select one campaign day between **2026-12-01 and 2026-12-31**.
 3. Choose **Refresh KoL Store Log**. This makes one explicit read of `backoffice.php?which=3` and extracts purchases, with repeated captures deduplicated and identical distinct transactions preserved.
 4. Choose **Inspect next 5 profiles**, or inspect individuals. Profile parsing reads `showplayer.php?who=<ID>` as HTML (no JavaScript is executed and profile snowball effects cannot run in that parser).
 5. Examine review flags. Explicitly approve, hold, or exclude individual players. Approvals never trigger sending.
@@ -50,6 +50,10 @@ KoLmafia routes `.js` files as JavaScript by default. A JavaScript **relay page*
 - Store Log only shows a rolling window. Save a daily capture; missed history cannot be recovered if it was never observed.
 - This repo is **separate from Mall Manager** to avoid overwriting `relay/backoffice.ash` or changing store repricing. It reuses the *approach* and transaction format, not a hard dependency on Mall Manager.
 - If you want snowball prevention on *ordinary* KoL profile pages, refer to [the existing KoLmafia forum hook](https://kolmafia.us/threads/hide-snowballs-in-player-profiles.29556/). We intentionally do not install `relay/showplayer.ash`, because it could overwrite another user's relay override. Background profile inspection does not execute the page JavaScript.
+- **Migrating from v0.1 name-based settings:** older `proxy`/`prize` labels in the saved JSON are preserved until Settings is saved again, but intentionally ignored. Enter both numeric IDs, inspect their resolved names, and save. No old name is automatically converted into an ID.
+- If the item ID does not resolve in the local KoLmafia item database, the dashboard reports an unknown ID and does not build an approval queue. Both IDs must resolve and be distinct. No remote item lookup is performed.
+- The Store Log exposes item *names* rather than authoritative item IDs; matching is against the KoLmafia-resolved canonical proxy name. A rare exact-name collision in the Store Log cannot be distinguished by this evidence alone. Verify the proxy item in the shop.
+- CSV exports include `prize_item_id` and the resolved `prize_item_name`, not a user-entered prize label.
 - A **daily CSV export is not proof that items were sent**. Live Kmail and reconciliation belong in a later separately verified release.
 - The UI theme uses only black (`#000000`), Frost Blue (`#ABD1F3`), Light Tropical Blue (`#C2E0F9`), True White (`#FCFCFF`) and Clear Frost (`#DFF7FA`) without gradients or shadows.
 

@@ -21,6 +21,26 @@ function lines(contents){
   var keys=Object.keys(contents).sort(function(a,b){return Number(a)-Number(b);});
   var out=[];for(var i=0;i<keys.length;i++)out.push(String(contents[keys[i]]));return out;
 }
+// Resolve by canonical KoL item ID only; NEVER use a fuzzy name lookup.
+// Item.get() and toInt() are KoLmafia's enumerated item API.
+function resolveItem(value){
+  var id=core.safeItemId(value);
+  if(!id)return {id:String(value==null?"":value),name:"",valid:false};
+  try{
+    var item=k.Item.get(Number(id));
+    if(!item||Number(k.toInt(item))!==Number(id))return {id:id,name:"",valid:false};
+    var name=String(item.name==null?"":item.name);
+    if(!core.trim(name)||name==="none")return {id:id,name:"",valid:false};
+    return {id:id,name:name,valid:true};
+  }catch(e){return {id:id,name:"",valid:false};}
+}
+function configuredItems(s){
+  return {proxy:resolveItem(s.config.proxyItemId),prize:resolveItem(s.config.prizeItemId)};
+}
+function displayItem(item){
+  return item.valid?escapeHtml(item.name)+" <span class='small'>(#"+escapeHtml(item.id)+")</span>"
+    :"<strong>NOT CONFIGURED / UNKNOWN ITEM ID</strong>"+(item.id?" (#"+escapeHtml(item.id)+")":"");
+}
 function statePath(owner){return "crimbo-giveaway-"+owner+".json";}
 function load(owner){
   var raw=lines(k.fileToArray(statePath(owner))).join("\n");
@@ -81,11 +101,14 @@ function handle(owner,s){
     s.config.day=day;addEvent(s,"day_selected",day,"");save(owner,s);return "Selected giveaway day "+day+".";
   }
   if(action==="settings"){
-    var proxy=core.trim(k.formField("proxy")),prize=core.trim(k.formField("prize"));
-    if(proxy.length<2||proxy.length>100||prize.length<2||prize.length>100)throw new Error("Proxy/prize names must be 2-100 characters.");
-    s.config.proxy=proxy;s.config.prize=prize;
-    addEvent(s,"settings_updated","",proxy+" / "+prize);save(owner,s);
-    return "Proxy and prize labels saved. Live sending is still disabled.";
+    var proxy=resolveItem(k.formField("proxyItemId")),prize=resolveItem(k.formField("prizeItemId"));
+    if(!proxy.valid||!prize.valid)throw new Error("Both fields require valid positive KoL item IDs recognized by this KoLmafia installation. Nothing saved.");
+    if(proxy.id===prize.id)throw new Error("The proxy ticket and actual prize must be different items. Nothing saved.");
+    s.config.proxyItemId=proxy.id;s.config.prizeItemId=prize.id;
+    // Never retain editable names as authorities after migrating from v0.1.
+    delete s.config.proxy;delete s.config.prize;
+    addEvent(s,"item_ids_updated","",proxy.id+"="+proxy.name+" / "+prize.id+"="+prize.name);save(owner,s);
+    return "Item IDs saved: proxy #"+proxy.id+" ("+proxy.name+"); prize #"+prize.id+" ("+prize.name+"). Live sending remains disabled.";
   }
   if(action==="link"){
     var name=core.normalize(k.formField("name"));
@@ -96,7 +119,7 @@ function handle(owner,s){
   }
   if(action==="inspect")return inspect(owner,s,id);
   if(action==="inspect_next"){
-    var queue=core.makeQueue(s),n=0,summary=[];
+    var queue=core.makeQueue(s,configuredItems(s).proxy),n=0,summary=[];
     for(var i=0;i<queue.length&&n<5;i++){
       var q=queue[i];if(q.id&&(!s.profiles[q.id]||!s.profiles[q.id].valid)){
         summary.push(inspect(owner,s,q.id));n++;
@@ -118,7 +141,10 @@ function handle(owner,s){
     return "Player #"+id+" removed from manual exclusions (account-date cutoff still applies).";
   }
   if(action==="approve"||action==="hold"){
-    var rows=core.makeQueue(s),found=null;
+    var selection=configuredItems(s);
+    if(!selection.proxy.valid||!selection.prize.valid||selection.proxy.id===selection.prize.id)
+      throw new Error("Cannot review approvals until both distinct item IDs resolve in KoLmafia.");
+    var rows=core.makeQueue(s,selection.proxy),found=null;
     for(var x=0;x<rows.length;x++)if(rows[x].id===id)found=rows[x];
     if(!found||found.excluded||found.underage||!s.profiles[id]||!s.profiles[id].valid)throw new Error("Cannot approve/hold unresolved or excluded player.");
     s.decisions[s.config.day+"|"+id]=action;
@@ -132,7 +158,9 @@ function css(){return "<style>"+
 "</style>";}
 function render(owner,s,message,error){
   var tab=String(k.formField("tab")||"queue");if(["queue","exclusions","archive","settings"].indexOf(tab)<0)tab="queue";
-  var rows=core.makeQueue(s),approved=0,flagged=0,excluded=0,held=0;
+  var items=configuredItems(s);
+  var itemsReady=items.proxy.valid&&items.prize.valid&&items.proxy.id!==items.prize.id;
+  var rows=itemsReady?core.makeQueue(s,items.proxy):[],approved=0,flagged=0,excluded=0,held=0;
   for(var i=0;i<rows.length;i++){if(rows[i].status==="APPROVED")approved++;if(rows[i].flags.length)flagged++;if(rows[i].status==="EXCLUDED")excluded++;if(rows[i].status==="HOLD: ID/profile"||rows[i].status==="HELD")held++;}
   var h=["<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='darkreader-lock'><title>CrimboGiveaway</title>",css(),"</head><body><main>"];
   h.push("<header><div class='section'><div><h1>❄ CrimboGiveaway</h1><p>KoLmafia giveaway workbench · Prototype v0.1</p></div><div class='small'>Operator: "+escapeHtml(k.myName())+" (#"+escapeHtml(owner)+")<br>Selected day: "+escapeHtml(s.config.day)+"</div></div></header>");
@@ -142,10 +170,11 @@ function render(owner,s,message,error){
   if(message)h.push("<div class='note' role='status'>"+escapeHtml(message)+"</div>");
   h.push("<div class='grid'><div class='tile'><b>"+rows.length+"</b>Daily purchasers</div><div class='tile'><b>"+flagged+"</b>Flagged</div><div class='tile'><b>"+excluded+"</b>Excluded</div><div class='tile'><b>"+approved+"</b>Approved</div></div>");
   if(tab==="queue"){
-    h.push("<section class='panel'><div class='section'><div><h2>Daily purchase and verification queue</h2><p class='small'>Proxy: <b>"+escapeHtml(s.config.proxy)+"</b> · Prize: <b>"+escapeHtml(s.config.prize)+"</b> · Held: "+held+"</p></div><div>"+submit("refresh","Refresh KoL Store Log",{},"")+" "+submit("inspect_next","Inspect next 5 profiles",{},"minor")+"</div></div>");
+    h.push("<section class='panel'><div class='section'><div><h2>Daily purchase and verification queue</h2><p class='small'>Proxy ticket: <b>"+displayItem(items.proxy)+"</b> · Actual prize: <b>"+displayItem(items.prize)+"</b> · Held: "+held+"</p></div><div>"+submit("refresh","Refresh KoL Store Log",{},"")+" "+submit("inspect_next","Inspect next 5 profiles",{},"minor")+"</div></div>");
+    if(!itemsReady)h.push("<div class='alert' role='alert'><strong>Item configuration incomplete or invalid.</strong> Open <a href='"+RELAY_URL+"&amp;tab=settings'>Settings</a> and enter two distinct, valid KoL item IDs. Purchase matching and approvals are disabled until both resolve successfully. Existing sales and decisions are preserved.</div>");
     h.push("<div class='note'>A purchase does not authorize a send. All recipients require explicit approval. This version <b>does not send Kmail</b>.</div>");
     h.push("<div class='tablewrap'><table><thead><tr><th>Player / profile</th><th>Purchases</th><th>Profile flags</th><th>Status</th><th>Operator review</th></tr></thead><tbody>");
-    if(!rows.length)h.push("<tr><td colspan='5'>No matching purchases captured for this giveaway day. Refresh the Store Log or select another date.</td></tr>");
+    if(!rows.length)h.push("<tr><td colspan='5'>"+(itemsReady?"No matching purchases captured for this giveaway day. Refresh the Store Log or select another date.":"Configure both item IDs in Settings to populate the queue.")+"</td></tr>");
     for(i=0;i<rows.length;i++){
       var q=rows[i];h.push("<tr><td><b>"+escapeHtml(q.name)+"</b><br>");
       if(q.id)h.push("<a target='_blank' rel='noopener' href='showplayer.php?who="+q.id+"'>#"+q.id+" · Profile</a>");
@@ -164,11 +193,17 @@ function render(owner,s,message,error){
       h.push("</td></tr>");
     }
     h.push("</tbody></table></div></section>");
-    var csv=core.exportCsv(rows,s);h.push("<section class='panel'><h2>Daily export and distribution</h2><p>Approved players: <b>"+approved+"</b>. This CSV is a review/export record, not an authoritative Kmail receipt.</p><a class='link' download='crimbo-"+s.config.day+".csv' href='data:text/csv;charset=utf-8,"+attr(encodeURIComponent(csv))+"'>Export daily CSV</a> <button disabled title='Live Kmail is not implemented or verified in prototype v0.1'>Send approved batch — not available in v0.1</button></section>");
+    var csv=core.exportCsv(rows,s,items.prize);h.push("<section class='panel'><h2>Daily export and distribution</h2><p>Approved players: <b>"+approved+"</b>. This CSV is a review/export record, not an authoritative Kmail receipt.</p><a class='link' download='crimbo-"+s.config.day+".csv' href='data:text/csv;charset=utf-8,"+attr(encodeURIComponent(csv))+"'>Export daily CSV</a> <button disabled title='Live Kmail is not implemented or verified in prototype v0.1'>Send approved batch — not available in v0.1</button></section>");
   }else if(tab==="settings"){
     h.push("<section class='panel'><h2>Campaign configuration</h2><p>Dates: "+s.config.start+" through "+s.config.end+". Accounts created on or after "+s.config.cutoff+" are automatically excluded when inspected.</p>");
     h.push(formStart("settings")+"<input type='hidden' name='action' value='set_day'><label>Review day <input type='date' name='day' min='2026-12-01' max='2026-12-31' value='"+attr(s.config.day)+"'></label> <button>Set day</button></form><p class='small'>Dates follow the KoL Store Log day; verify the rollover boundary before distributing.</p>");
-    h.push("<hr>"+formStart("settings")+"<input type='hidden' name='action' value='settings'><label>Exact proxy item name <input name='proxy' required value='"+attr(s.config.proxy)+"'></label> <label>Prize label <input name='prize' required value='"+attr(s.config.prize)+"'></label> <button>Save labels</button></form>");
+    h.push("<hr><h3>Item IDs (required)</h3><p>Enter numeric KoL item IDs, not names. Names below are read directly from KoLmafia's local item database. Both must resolve before purchases can be reviewed.</p>");
+    h.push(formStart("settings")+"<input type='hidden' name='action' value='settings'>"+
+      "<label>Proxy ticket item ID <input type='number' min='1' max='2147483647' step='1' inputmode='numeric' name='proxyItemId' required value='"+attr(s.config.proxyItemId||"")+"'></label> "+
+      "<label>Actual prize item ID <input type='number' min='1' max='2147483647' step='1' inputmode='numeric' name='prizeItemId' required value='"+attr(s.config.prizeItemId||"")+"'></label> <button>Save item IDs</button></form>");
+    h.push("<p class='note'>Proxy: <b>"+displayItem(items.proxy)+"</b><br>Prize: <b>"+displayItem(items.prize)+"</b></p>");
+    if(!itemsReady)h.push("<p class='alert'>The queue remains disabled until two different, valid item IDs are configured. Older name-only settings will not be guessed or automatically converted.</p>");
+    h.push("<p class='small'>The Store Log records item names, not authoritative item IDs; the script compares purchases to the canonical name resolved from your proxy ID. If two different KoL items share the exact name, the log alone cannot distinguish them.</p>");
     h.push("<p>Review flags: ascensions ≤ "+s.config.ascensionsMax+", lifetime turns &lt; "+s.config.turnsBelow+", missing clan/store/display case, or name contains ‘bot’.</p></section>");
   }else if(tab==="exclusions"){
     var ids=Object.keys(s.exclusions).sort();h.push("<section class='panel'><h2>Exclusion registry</h2><p>Exclusions apply across the full campaign. Removing an automatically excluded new account cannot bypass the creation-date rule.</p><div class='tablewrap'><table><tr><th>Player</th><th>Reason</th><th>Source</th><th>Action</th></tr>");

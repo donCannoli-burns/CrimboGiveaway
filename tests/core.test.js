@@ -31,18 +31,33 @@ assert(core.reviewFlags('TotallyBot',young,core.makeConfig()).includes('no_clan'
 assert.equal(core.isoDate('2026-02-30'),'');
 const state=core.makeState('99');
 state.config.day='2026-10-24';
+state.config.proxyItemId='101';state.config.prizeItemId='202';
+const proxy={id:'101',name:'proxy ticket',valid:true};
 state.sales=repeat.sales;
 state.profiles['1952270']=p;
-let rows=core.makeQueue(state);
+let rows=core.makeQueue(state,proxy);
 assert.equal(rows.length,1);
 assert.equal(rows[0].orders,2);
 assert.equal(rows[0].status,'REVIEW');
 state.decisions['2026-10-24|1952270']='approve';
-rows=core.makeQueue(state);
+rows=core.makeQueue(state,proxy);
 assert.equal(rows[0].status,'APPROVED');
 state.exclusions['1952270']={reason:'manual'};
-rows=core.makeQueue(state);
+rows=core.makeQueue(state,proxy);
 assert.equal(rows[0].status,'EXCLUDED');
 assert.equal(core.safeId('1;send 2'),'');
-assert(core.exportCsv([{name:'=HYPERLINK("evil")',id:'5',orders:1,flags:[],status:'REVIEW'}],state).includes("'=HYPERLINK"));
+assert.equal(core.safeItemId('101'),'101');
+for (const bad of ['','0','-1','+7','1.0','1;send',' 1 2 ','0001','2147483648','999999999999999999999']) {
+  assert.equal(core.safeItemId(bad),'', 'reject malformed/out-of-range item id '+bad);
+}
+const unconfigured=core.makeState('55');
+unconfigured.sales=repeat.sales;unconfigured.config.day='2026-10-24';
+assert.equal(core.makeQueue(unconfigured,proxy).length,0,'legacy name-only state cannot match purchases');
+unconfigured.config.proxyItemId='101';
+assert.equal(core.makeQueue(unconfigured,{id:'102',name:'proxy ticket',valid:true}).length,0,'mismatched ID/name pair rejected');
+assert.equal(core.makeQueue(unconfigured,{id:'101',name:'proxy ticket',valid:false}).length,0,'unknown item ID blocked');
+const csv=core.exportCsv([{name:'=HYPERLINK("evil")',id:'5',orders:1,flags:[],status:'REVIEW'}],state,{id:'202',name:'Uncle Buck',valid:true});
+assert(csv.includes('prize_item_id,prize_item_name'));
+assert(csv.includes('"202","Uncle Buck"'));
+assert(csv.includes("'=HYPERLINK"));
 console.log('core.test.js PASS');

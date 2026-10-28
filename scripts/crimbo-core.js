@@ -79,7 +79,15 @@ function parseProfile(html,playerId) {
     valid:!!(creation&&asc!==null&&turns!==null&&/Account Created/i.test(text)),
     capturedAt:""};
 }
-function makeConfig() {return {start:"2026-12-01",end:"2026-12-31",cutoff:"2026-12-01",day:"2026-12-01",proxy:"proxy ticket",prize:"Uncle Buck",ascensionsMax:1,turnsBelow:10000};}
+// Numeric KoL item IDs are the only authoritative item configuration.
+// Do not infer IDs from old free-text names; operators must verify both IDs.
+function safeItemId(value) {
+  var s=trim(value);
+  if(!/^[1-9][0-9]{0,9}$/.test(s))return "";
+  var id=Number(s);
+  return id<=2147483647 ? s : "";
+}
+function makeConfig() {return {start:"2026-12-01",end:"2026-12-31",cutoff:"2026-12-01",day:"2026-12-01",proxyItemId:"",prizeItemId:"",ascensionsMax:1,turnsBelow:10000};}
 function makeState(ownerId) {return {schema:"crimbo-giveaway.v0.1",ownerId:String(ownerId),config:makeConfig(),sales:[],profiles:{},nameIds:{},exclusions:{},decisions:{},events:[],lastScan:""};}
 function reviewFlags(name, profile, config) {
   var flags=[];
@@ -92,10 +100,13 @@ function reviewFlags(name, profile, config) {
   if(!profile.display)flags.push("no_display_case");
   return flags;
 }
-function makeQueue(state) {
+function makeQueue(state, proxyItem) {
   var c=state.config,byId={},out=[];
+  // A valid, KoLmafia-resolved ID/name pair is required for purchase matching.
+  // Old name-only settings and an unresolved ID MUST NOT create a queue.
+  if(!proxyItem||!proxyItem.valid||!safeItemId(c.proxyItemId)||String(proxyItem.id)!==String(c.proxyItemId))return [];
   for(var i=0;i<state.sales.length;i++){
-    var s=state.sales[i];if(s.day!==c.day||normalize(s.item)!==normalize(c.proxy))continue;
+    var s=state.sales[i];if(s.day!==c.day||normalize(s.item)!==normalize(proxyItem.name))continue;
     var id=String(s.playerId||state.nameIds[normalize(s.name)]||"");
     var key=id?"id:"+id:"name:"+normalize(s.name),q=byId[key];
     if(!q){q={key:key,id:id,name:s.name,orders:0,quantity:0};byId[key]=q;out.push(q);}
@@ -114,9 +125,10 @@ function makeQueue(state) {
 }
 function safeId(value){var s=trim(value);return /^\d{1,12}$/.test(s)&&Number(s)>0?s:"";}
 function csvCell(v){var s=String(v==null?"":v);if(/^[=+@\-\t\r]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}
-function exportCsv(rows,state){var lines=["day,player_id,player_name,proxy_purchases,flags,status,prize_item"];
- for(var i=0;i<rows.length;i++){var q=rows[i];lines.push([state.config.day,q.id,q.name,q.orders,q.flags.join(";"),q.status,state.config.prize].map(csvCell).join(","));}
+function exportCsv(rows,state,prizeItem){var lines=["day,player_id,player_name,proxy_purchases,flags,status,prize_item_id,prize_item_name"];
+ for(var i=0;i<rows.length;i++){var q=rows[i];lines.push([state.config.day,q.id,q.name,q.orders,q.flags.join(";"),q.status,
+   prizeItem&&prizeItem.valid?prizeItem.id:"",prizeItem&&prizeItem.valid?prizeItem.name:""].map(csvCell).join(","));}
  return lines.join("\n")+"\n";}
 module.exports={trim:trim,plain:plain,normalize:normalize,htmlText:htmlText,isoDate:isoDate,dateFromSale:dateFromSale,parseSales:parseSales,
   saleKey:saleKey,mergeSales:mergeSales,parseProfile:parseProfile,makeConfig:makeConfig,makeState:makeState,
-  reviewFlags:reviewFlags,makeQueue:makeQueue,safeId:safeId,exportCsv:exportCsv};
+  reviewFlags:reviewFlags,makeQueue:makeQueue,safeId:safeId,safeItemId:safeItemId,exportCsv:exportCsv};
