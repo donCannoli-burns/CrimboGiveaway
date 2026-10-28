@@ -15,9 +15,30 @@ Module._load=function(request,parent,isMain){if(request==='kolmafia')return mock
 const app=require('../relay/relay_CrimboGiveaway.js');
 function page(f){fields=f||{};writes=[];app.main();return writes.join('');}
 assert(page({}).includes('CrimboGiveaway'));
+// KoLmafia serves JavaScript scripts as text/javascript unless relay=true is
+// included on every relay page request, not just the first dropdown click.
+// This caused HTML source to appear after clicking tabs and action buttons.
+const tabs=['queue','exclusions','archive','settings'];
+for (const tab of tabs) {
+  const html=page({tab});
+  assert(html.startsWith('<!doctype html>'),tab+' must return a full HTML page');
+  const hrefs=Array.from(html.matchAll(/href='(relay_CrimboGiveaway\.js[^']*)'/g),m=>m[1]);
+  assert.equal(hrefs.length,4,tab+' must have all four navigation links');
+  for (const href of hrefs) {
+    assert(href.startsWith('relay_CrimboGiveaway.js?relay=true&amp;tab='),
+      tab+' navigation must route via HTML relay execution: '+href);
+  }
+  const forms=Array.from(html.matchAll(/<form\s+[^>]*action='([^']+)'/g),m=>m[1]);
+  if (tab !== 'archive') assert(forms.length>0,tab+' must present one or more actions');
+  for (const formAction of forms) {
+    assert.equal(formAction,'relay_CrimboGiveaway.js?relay=true',
+      tab+' forms must submit to relay execution, not the static JS file');
+  }
+}
 assert(page({action:'refresh'}).includes('PlayerBot'));
 assert.equal(visited.length,1);
 assert(page({action:'inspect',id:'321'}).includes('EXCLUDED'));
+assert(page({tab:'exclusions'}).includes("name='tab' value='exclusions'"));
 assert(page({action:'approve',id:'321'}).includes('Cannot approve'));
 assert(page({action:'unexclude',id:'321'}).includes('EXCLUDED')); // hard cutoff persists
 assert(page({action:'refresh'}).includes('0 new transactions'));

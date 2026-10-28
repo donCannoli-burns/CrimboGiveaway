@@ -5,6 +5,10 @@
 var k = require("kolmafia");
 var core = require("../scripts/crimbo-core.js");
 
+// KoLmafia serves .js URLs as JavaScript unless relay=true is present.
+// Keep this marker on every link and form, not just the dropdown entry.
+var RELAY_URL = "relay_CrimboGiveaway.js?relay=true";
+
 function escapeHtml(s) {
   return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -31,9 +35,9 @@ function save(owner,s){
   if(!k.bufferToFile(JSON.stringify(s,null,2)+"\n",statePath(owner)))throw new Error("Could not write data/"+statePath(owner));
 }
 function addEvent(s,kind,subject,detail){s.events.push({at:now(),day:s.config.day,kind:kind,subject:String(subject||""),detail:String(detail||"")});}
-function formStart(tab){return "<form method='POST' action='relay_CrimboGiveaway.js'><input type='hidden' name='tab' value='"+attr(tab||"queue")+"'>";}
-function submit(action,label,fields,cls){
-  var h=formStart("queue")+"<input type='hidden' name='action' value='"+attr(action)+"'>";
+function formStart(tab){return "<form method='POST' action='"+RELAY_URL+"'><input type='hidden' name='tab' value='"+attr(tab||"queue")+"'>";}
+function submit(action,label,fields,cls,tab){
+  var h=formStart(tab||"queue")+"<input type='hidden' name='action' value='"+attr(action)+"'>";
   var names=Object.keys(fields||{});for(var i=0;i<names.length;i++)h+="<input type='hidden' name='"+attr(names[i])+"' value='"+attr(fields[names[i]])+"'>";
   return h+"<button class='"+attr(cls||"minor")+"' type='submit'>"+escapeHtml(label)+"</button></form>";
 }
@@ -133,7 +137,7 @@ function render(owner,s,message,error){
   var h=["<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='darkreader-lock'><title>CrimboGiveaway</title>",css(),"</head><body><main>"];
   h.push("<header><div class='section'><div><h1>❄ CrimboGiveaway</h1><p>KoLmafia giveaway workbench · Prototype v0.1</p></div><div class='small'>Operator: "+escapeHtml(k.myName())+" (#"+escapeHtml(owner)+")<br>Selected day: "+escapeHtml(s.config.day)+"</div></div></header>");
   h.push("<nav>");var tabs={queue:"Daily queue",exclusions:"Exclusions",archive:"Audit archive",settings:"Settings"};
-  Object.keys(tabs).forEach(function(t){h.push("<a class='"+(tab===t?"current":"")+"' href='relay_CrimboGiveaway.js?tab="+t+"'>"+tabs[t]+"</a>");});h.push("</nav>");
+  Object.keys(tabs).forEach(function(t){h.push("<a class='"+(tab===t?"current":"")+"' href='"+RELAY_URL+"&amp;tab="+t+"'>"+tabs[t]+"</a>");});h.push("</nav>");
   if(error)h.push("<div class='alert' role='alert'>"+escapeHtml(error)+"</div>");
   if(message)h.push("<div class='note' role='status'>"+escapeHtml(message)+"</div>");
   h.push("<div class='grid'><div class='tile'><b>"+rows.length+"</b>Daily purchasers</div><div class='tile'><b>"+flagged+"</b>Flagged</div><div class='tile'><b>"+excluded+"</b>Excluded</div><div class='tile'><b>"+approved+"</b>Approved</div></div>");
@@ -168,7 +172,7 @@ function render(owner,s,message,error){
     h.push("<p>Review flags: ascensions ≤ "+s.config.ascensionsMax+", lifetime turns &lt; "+s.config.turnsBelow+", missing clan/store/display case, or name contains ‘bot’.</p></section>");
   }else if(tab==="exclusions"){
     var ids=Object.keys(s.exclusions).sort();h.push("<section class='panel'><h2>Exclusion registry</h2><p>Exclusions apply across the full campaign. Removing an automatically excluded new account cannot bypass the creation-date rule.</p><div class='tablewrap'><table><tr><th>Player</th><th>Reason</th><th>Source</th><th>Action</th></tr>");
-    for(i=0;i<ids.length;i++){var id=ids[i],e=s.exclusions[id];h.push("<tr><td><a target='_blank' rel='noopener' href='showplayer.php?who="+id+"'>#"+id+"</a></td><td>"+escapeHtml(e.reason)+"</td><td>"+escapeHtml(e.source)+"</td><td>"+submit("unexclude","Remove",{id:id},"minor")+"</td></tr>");}
+    for(i=0;i<ids.length;i++){var id=ids[i],e=s.exclusions[id];h.push("<tr><td><a target='_blank' rel='noopener' href='showplayer.php?who="+id+"'>#"+id+"</a></td><td>"+escapeHtml(e.reason)+"</td><td>"+escapeHtml(e.source)+"</td><td>"+submit("unexclude","Remove",{id:id},"minor","exclusions")+"</td></tr>");}
     if(!ids.length)h.push("<tr><td colspan='4'>No excluded players yet.</td></tr>");
     h.push("</table></div><h3>Exclude by player ID</h3>"+formStart("exclusions")+"<input type='hidden' name='action' value='exclude'><input name='id' placeholder='Player ID' required> <input name='reason' placeholder='Reason' maxlength='180' required> <button>Exclude</button></form></section>");
   }else{

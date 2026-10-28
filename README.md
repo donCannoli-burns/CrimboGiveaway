@@ -13,7 +13,7 @@ git checkout https://github.com/donCannoli-burns/CrimboGiveaway.git
 Open **Relay Browser** and choose **CrimboGiveaway** in the **-run script-** dropdown (the top-right/bottom-right location depends on your KoL UI layout). The UI script is `relay/relay_CrimboGiveaway.js` and its direct URL with the default relay proxy port is:
 
 ```text
-http://127.0.0.1:60080/relay_CrimboGiveaway.js
+http://127.0.0.1:60080/relay_CrimboGiveaway.js?relay=true
 ```
 
 The gCLI entry point deliberately points users to the relay interface rather than doing background work:
@@ -24,6 +24,10 @@ CrimboGiveaway help
 ```
 
 If an older KoLmafia build does not display JavaScript relay scripts in the dropdown, update KoLmafia before attempting to use this tool. Do not replace an existing relay script to work around a missing menu item.
+
+## Relay page navigation compatibility
+
+KoLmafia routes `.js` files as JavaScript by default. A JavaScript **relay page** must use `?relay=true` to be served as rendered HTML; all CrimboGiveaway internal tabs and POST form actions preserve that marker. Without it, clicking links or action buttons may display raw page markup/source rather than the dashboard. If upgrading from v0.1, run `git update CrimboGiveaway`, then reload the relay page via the dropdown or use the URL above. Do not rely on previously open stale tabs.
 
 ## Workflow
 
